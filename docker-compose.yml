@@ -1,0 +1,19 @@
+services:
+  payment-service:
+    build: .
+    container_name: payment-service
+
+    ports:
+      - "8080:8080"
+
+    env_file:
+      - .env
+
+    networks:
+      - agora-network
+
+
+networks:
+  agora-network:
+    external: true
+    name: agora-network
