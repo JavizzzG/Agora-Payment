@@ -22,6 +22,7 @@ public class ProductService {
         ProductListParams params = ProductListParams.builder()
                 .setActive(true)
                 .setLimit(100L)
+                .addExpand("data.default_price")
                 .build();
 
         ProductCollection products = Product.list(params);
