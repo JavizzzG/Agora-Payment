@@ -8,6 +8,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @RestController
@@ -26,8 +27,22 @@ public class ProductController {
     }
 
     @GetMapping("/pay-product/{productId}")
-    public ResponseEntity<String> getPaymentLink(@RequestHeader("X-User-Id") UUID userId, @PathVariable String productId) throws StripeException {
-        return ResponseEntity.status(HttpStatus.OK).body(productService.getPaymentLink(userId, productId));
+    public ResponseEntity<Map<String, String>> getPaymentLink(@RequestHeader("X-User-Id") UUID userId, @PathVariable String productId) throws StripeException {
+        String url = productService.getPaymentLink(userId, productId);
+        return ResponseEntity.status(HttpStatus.OK).body(Map.of("url", url));
+    }
+
+    @PostMapping("/checkout")
+    public ResponseEntity<Map<String, String>> createCheckoutSession(
+            @RequestHeader("X-User-Id") UUID userId,
+            @RequestBody Map<String, String> body
+    ) throws StripeException {
+        String productId = body.get("productId");
+        String successUrl = body.get("successUrl");
+        String cancelUrl = body.get("cancelUrl");
+
+        String url = productService.createCheckoutSession(userId, productId, successUrl, cancelUrl);
+        return ResponseEntity.status(HttpStatus.OK).body(Map.of("url", url));
     }
 
 }
