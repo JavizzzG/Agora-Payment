@@ -1,5 +1,6 @@
 package com.agora.payment.service;
 
+import com.agora.payment.exception.product.ProductNotFoundException;
 import com.stripe.Stripe;
 import com.stripe.exception.StripeException;
 import com.stripe.model.Product;
@@ -42,7 +43,7 @@ public class ProductService {
 
         if (product == null) {
             log.warn("Stripe product not found. id={} for user {}", productId, userId);
-            return null;
+            throw new ProductNotFoundException("Product not found with id: " + productId);
         }
 
         log.info("Payment link retrieved successfully. id={} for user {}", productId, userId);
