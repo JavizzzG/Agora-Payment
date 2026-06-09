@@ -1,7 +1,6 @@
 package com.agora.payment.service;
 
 import com.agora.payment.exception.product.ProductNotFoundException;
-import com.stripe.Stripe;
 import com.stripe.exception.StripeException;
 import com.stripe.model.Price;
 import com.stripe.model.Product;
@@ -11,7 +10,6 @@ import com.stripe.param.ProductListParams;
 import com.stripe.param.checkout.SessionCreateParams;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -21,11 +19,8 @@ import java.util.UUID;
 public class ProductService {
 
     private static final Logger log = LoggerFactory.getLogger(ProductService.class);
-    @Value("${stripe.secret}")
-    private String secret;
 
     public List<Product> getProducts() throws StripeException {
-        Stripe.apiKey = secret;
 
         ProductListParams params = ProductListParams.builder()
                 .setActive(true)
@@ -38,7 +33,6 @@ public class ProductService {
     }
 
     public String getPaymentLink(UUID userId, String productId) throws StripeException {
-        Stripe.apiKey = secret;
 
         log.info("Retrieving Stripe product. id={} for user {}", productId, userId);
 
@@ -55,7 +49,6 @@ public class ProductService {
     }
 
     public String createCheckoutSession(UUID userId, String productId, String successUrl, String cancelUrl) throws StripeException {
-        Stripe.apiKey = secret;
 
         log.info("Creating checkout session. productId={} for user {}", productId, userId);
 
