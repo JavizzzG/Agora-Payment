@@ -1,19 +1,55 @@
 services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:18.2-alpine
+    container_name: payment-service-postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USERNAME}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "${DB_EXTERNAL_PORT}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - payment-service-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Payment Service Application
   payment-service:
     build: .
     container_name: payment-service
-
+    environment:
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_NAME: ${DB_NAME}
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      STRIPE_SECRET: ${STRIPE_SECRET}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
     ports:
       - "8084:8080"
-
-    env_file:
-      - .env
-
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
+      - payment-service-network
       - agora-network
+    restart: unless-stopped
 
+volumes:
+  postgres_data:
+    driver: local
 
 networks:
+  payment-service-network:
+    driver: bridge
+
   agora-network:
     external: true
     name: agora-network
