@@ -6,6 +6,7 @@ import com.stripe.model.Event;
 import com.stripe.net.Webhook;
 import com.stripe.exception.SignatureVerificationException;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -18,6 +19,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/payment/subscription")
 @RequiredArgsConstructor
+@Slf4j
 public class SubscriptionController {
 
     private final SubscriptionService subscriptionService;
@@ -27,15 +29,20 @@ public class SubscriptionController {
             @RequestBody byte[] payload,
             @RequestHeader("Stripe-Signature") String sigHeader
     ) {
+        log.info("Received Stripe webhook");
         try {
             Event event = Webhook.constructEvent(
                     new String(payload, StandardCharsets.UTF_8),
                     sigHeader,
                     subscriptionService.getWebhookSecret()
             );
+            log.info("Processing Stripe event: {}", event);
             subscriptionService.processEvent(event);
+            log.info("Webhook processed successfully");
             return ResponseEntity.ok("Webhook received");
+
         } catch (SignatureVerificationException e) {
+            log.error("Invalid signature", e);
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid signature");
         }
     }
