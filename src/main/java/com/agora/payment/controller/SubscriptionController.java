@@ -29,16 +29,13 @@ public class SubscriptionController {
             @RequestBody byte[] payload,
             @RequestHeader("Stripe-Signature") String sigHeader
     ) {
-        log.info("Received Stripe webhook");
         try {
             Event event = Webhook.constructEvent(
                     new String(payload, StandardCharsets.UTF_8),
                     sigHeader,
                     subscriptionService.getWebhookSecret()
             );
-            log.info("Processing Stripe event: {}", event);
             subscriptionService.processEvent(event);
-            log.info("Webhook processed successfully");
             return ResponseEntity.ok("Webhook received");
 
         } catch (SignatureVerificationException e) {
