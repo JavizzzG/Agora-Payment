@@ -11,7 +11,7 @@ import java.util.UUID;
 @Entity
 @Table(name = "subscriptions", indexes = {
         @Index(name = "idx_subscriptions_user_id", columnList = "userId"),
-        @Index(name = "idx_subscriptions_stripe_subscription_id", columnList = "stripeSubscriptionId"),
+        @Index(name = "idx_subscriptions_stripe_subscription_id", columnList = "stripeSubscriptionId", unique = true),
         @Index(name = "idx_subscriptions_stripe_customer_id", columnList = "stripeCustomerId")
 })
 @Getter

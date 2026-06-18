@@ -69,18 +69,28 @@ public class SubscriptionService {
             return;
         }
 
-        Subscription subscription = new Subscription();
-        subscription.setUserId(UUID.fromString(userIdStr));
+        String stripeSubscriptionId = session.getSubscription();
+
+        Optional<Subscription> existing = stripeSubscriptionId != null
+                ? subscriptionRepository.findByStripeSubscriptionId(stripeSubscriptionId)
+                : Optional.empty();
+
+        Subscription subscription = existing.orElseGet(Subscription::new);
+
+        if (existing.isEmpty()) {
+            subscription.setUserId(UUID.fromString(userIdStr));
+        }
         subscription.setAmount(session.getAmountTotal());
         subscription.setCurrency(session.getCurrency());
         subscription.setStripeCustomerId(session.getCustomer());
-        subscription.setStripeSubscriptionId(session.getSubscription());
+        subscription.setStripeSubscriptionId(stripeSubscriptionId);
         subscription.setStatus(Subscription.Status.INCOMPLETE);
 
         subscriptionRepository.save(subscription);
 
-        log.info("Checkout completed: subscriptionId={} amount={} {} user={}",
-                subscription.getId(), subscription.getAmount(), subscription.getCurrency(), userIdStr);
+        log.info("Checkout completed: subscriptionId={} stripeSubId={} amount={} {} user={}",
+                subscription.getId(), stripeSubscriptionId,
+                subscription.getAmount(), subscription.getCurrency(), userIdStr);
     }
 
     private void handleSubscriptionCreated(Event event) {
