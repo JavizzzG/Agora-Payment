@@ -72,7 +72,7 @@ public class ProductService {
                 ? SessionCreateParams.Mode.SUBSCRIPTION
                 : SessionCreateParams.Mode.PAYMENT;
 
-        SessionCreateParams params = SessionCreateParams.builder()
+        SessionCreateParams.Builder paramsBuilder = SessionCreateParams.builder()
                 .setMode(mode)
                 .setSuccessUrl(successUrl)
                 .setCancelUrl(cancelUrl)
@@ -82,8 +82,17 @@ public class ProductService {
                                 .setPrice(priceId)
                                 .setQuantity(1L)
                                 .build()
-                )
-                .build();
+                );
+
+        if (mode == SessionCreateParams.Mode.SUBSCRIPTION) {
+            paramsBuilder.setSubscriptionData(
+                    SessionCreateParams.SubscriptionData.builder()
+                            .putMetadata("user_id", userId.toString())
+                            .build()
+            );
+        }
+
+        SessionCreateParams params = paramsBuilder.build();
 
         Session session = Session.create(params);
 

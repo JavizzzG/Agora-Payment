@@ -4,6 +4,7 @@ import com.agora.payment.config.StripeConfig;
 import com.agora.payment.dto.SubscriptionResponse;
 import com.agora.payment.entity.Subscription;
 import com.agora.payment.repository.SubscriptionRepository;
+import com.stripe.exception.StripeException;
 import com.stripe.model.Event;
 import com.stripe.model.EventDataObjectDeserializer;
 import com.stripe.model.StripeObject;
@@ -44,6 +45,9 @@ public class SubscriptionService {
             case "customer.subscription.deleted" -> handleSubscriptionDeleted(event);
             case "invoice.paid" -> handleInvoicePaid(event);
             case "invoice.payment_failed" -> handleInvoicePaymentFailed(event);
+            case "invoice.finalized" -> handleInvoiceFinalized(event);
+            case "invoice.created", "payment_intent.created", "payment_intent.succeeded" ->
+                    log.debug("Ignoring event type: {}", event.getType());
             default -> log.info("Unhandled event type: {}", event.getType());
         }
     }
@@ -133,31 +137,79 @@ public class SubscriptionService {
                 });
     }
 
+    private void handleInvoiceFinalized(Event event) {
+        com.stripe.model.Invoice invoice =
+                (com.stripe.model.Invoice) deserializeStripeObject(event);
+        if (invoice == null) return;
+
+        Subscription subscription = findSubscriptionByInvoice(invoice).orElseGet(() -> {
+            try {
+                Subscription newSub = createSubscriptionFromInvoice(invoice);
+                newSub.setStatus(Subscription.Status.INCOMPLETE);
+                return newSub;
+            } catch (Exception e) {
+                log.error("Failed to create subscription from finalized invoice: customer={} subscription={}",
+                        invoice.getCustomer(), getInvoiceSubscriptionId(invoice), e);
+                return null;
+            }
+        });
+
+        if (subscription == null) {
+            log.warn("No subscription for finalized invoice: customer={} subscription={}",
+                    invoice.getCustomer(), getInvoiceSubscriptionId(invoice));
+            return;
+        }
+
+        if (invoice.getPeriodStart() != null) {
+            subscription.setCurrentPeriodStart(Instant.ofEpochSecond(invoice.getPeriodStart()));
+        }
+        if (invoice.getPeriodEnd() != null) {
+            subscription.setCurrentPeriodEnd(Instant.ofEpochSecond(invoice.getPeriodEnd()));
+        }
+        subscriptionRepository.save(subscription);
+
+        log.info("Invoice finalized: subscriptionId={} amount={} {}",
+                subscription.getId(), invoice.getAmountDue(), invoice.getCurrency());
+    }
+
     private void handleInvoicePaid(Event event) {
         com.stripe.model.Invoice invoice =
                 (com.stripe.model.Invoice) deserializeStripeObject(event);
         if (invoice == null) return;
 
-        // Invoice doesn't expose subscription directly in SDK v32, find by customer
-        findSubscriptionByCustomer(invoice.getCustomer()).ifPresent(subscription -> {
-            subscription.setStatus(Subscription.Status.ACTIVE);
-            if (invoice.getPeriodStart() != null) {
-                subscription.setCurrentPeriodStart(Instant.ofEpochSecond(invoice.getPeriodStart()));
+        Subscription subscription = findSubscriptionByInvoice(invoice).orElseGet(() -> {
+            try {
+                return createSubscriptionFromInvoice(invoice);
+            } catch (Exception e) {
+                log.error("Failed to create subscription from invoice: customer={} subscription={}",
+                        invoice.getCustomer(), getInvoiceSubscriptionId(invoice), e);
+                return null;
             }
-            if (invoice.getPeriodEnd() != null) {
-                subscription.setCurrentPeriodEnd(Instant.ofEpochSecond(invoice.getPeriodEnd()));
-            }
-            if (subscription.getAmount() == null) {
-                subscription.setAmount(invoice.getAmountPaid());
-            }
-            if (subscription.getCurrency() == null) {
-                subscription.setCurrency(invoice.getCurrency());
-            }
-            subscriptionRepository.save(subscription);
-
-            log.info("Invoice paid: subscriptionId={} amount={} {}",
-                    subscription.getId(), invoice.getAmountPaid(), invoice.getCurrency());
         });
+
+        if (subscription == null) {
+            log.warn("No subscription found for invoice: customer={} subscription={}",
+                    invoice.getCustomer(), getInvoiceSubscriptionId(invoice));
+            return;
+        }
+
+        subscription.setStatus(Subscription.Status.ACTIVE);
+        if (invoice.getPeriodStart() != null) {
+            subscription.setCurrentPeriodStart(Instant.ofEpochSecond(invoice.getPeriodStart()));
+        }
+        if (invoice.getPeriodEnd() != null) {
+            subscription.setCurrentPeriodEnd(Instant.ofEpochSecond(invoice.getPeriodEnd()));
+        }
+        if (subscription.getAmount() == null) {
+            subscription.setAmount(invoice.getAmountPaid());
+        }
+        if (subscription.getCurrency() == null) {
+            subscription.setCurrency(invoice.getCurrency());
+        }
+        subscriptionRepository.save(subscription);
+
+        log.info("Invoice paid: subscriptionId={} amount={} {}",
+                subscription.getId(), invoice.getAmountPaid(), invoice.getCurrency());
     }
 
     private void handleInvoicePaymentFailed(Event event) {
@@ -165,7 +217,7 @@ public class SubscriptionService {
                 (com.stripe.model.Invoice) deserializeStripeObject(event);
         if (invoice == null) return;
 
-        findSubscriptionByCustomer(invoice.getCustomer()).ifPresent(subscription -> {
+        findSubscriptionByInvoice(invoice).ifPresent(subscription -> {
             subscription.setStatus(Subscription.Status.PAST_DUE);
             subscriptionRepository.save(subscription);
 
@@ -176,6 +228,69 @@ public class SubscriptionService {
     private Optional<Subscription> findSubscriptionByCustomer(String stripeCustomerId) {
         if (stripeCustomerId == null) return Optional.empty();
         return subscriptionRepository.findByStripeCustomerId(stripeCustomerId);
+    }
+
+    private String getInvoiceSubscriptionId(com.stripe.model.Invoice invoice) {
+        if (invoice.getParent() != null
+                && invoice.getParent().getSubscriptionDetails() != null) {
+            return invoice.getParent().getSubscriptionDetails().getSubscription();
+        }
+        return null;
+    }
+
+    private Optional<Subscription> findSubscriptionByInvoice(com.stripe.model.Invoice invoice) {
+        String subscriptionId = getInvoiceSubscriptionId(invoice);
+        if (subscriptionId != null) {
+            Optional<Subscription> bySub = subscriptionRepository.findByStripeSubscriptionId(subscriptionId);
+            if (bySub.isPresent()) return bySub;
+        }
+        if (invoice.getCustomer() != null) {
+            return subscriptionRepository.findByStripeCustomerId(invoice.getCustomer());
+        }
+        return Optional.empty();
+    }
+
+    private Subscription createSubscriptionFromInvoice(com.stripe.model.Invoice invoice) throws StripeException {
+        Subscription subscription = new Subscription();
+        subscription.setStripeSubscriptionId(getInvoiceSubscriptionId(invoice));
+        subscription.setStripeCustomerId(invoice.getCustomer());
+        subscription.setStatus(Subscription.Status.ACTIVE);
+        subscription.setAmount(invoice.getAmountPaid());
+        subscription.setCurrency(invoice.getCurrency());
+        if (invoice.getPeriodStart() != null) {
+            subscription.setCurrentPeriodStart(Instant.ofEpochSecond(invoice.getPeriodStart()));
+        }
+        if (invoice.getPeriodEnd() != null) {
+            subscription.setCurrentPeriodEnd(Instant.ofEpochSecond(invoice.getPeriodEnd()));
+        }
+
+        if (invoice.getLines() != null && !invoice.getLines().getData().isEmpty()) {
+            var lineItem = invoice.getLines().getData().getFirst();
+            if (lineItem.getPricing() != null
+                    && lineItem.getPricing().getPriceDetails() != null) {
+                subscription.setPriceId(lineItem.getPricing().getPriceDetails().getPrice());
+                subscription.setProductId(lineItem.getPricing().getPriceDetails().getProduct());
+            }
+        }
+
+        String subscriptionId = getInvoiceSubscriptionId(invoice);
+        if (subscriptionId != null) {
+            com.stripe.model.Subscription stripeSub =
+                    com.stripe.model.Subscription.retrieve(subscriptionId);
+            String userIdStr = stripeSub.getMetadata().get("user_id");
+            if (userIdStr != null) {
+                subscription.setUserId(UUID.fromString(userIdStr));
+            }
+        }
+
+        if (subscription.getUserId() == null) {
+            log.warn("Could not determine user_id from invoice subscription metadata: {}",
+                    getInvoiceSubscriptionId(invoice));
+        }
+
+        log.info("Created subscription from invoice: subId={} customer={} user={}",
+                subscription.getStripeSubscriptionId(), invoice.getCustomer(), subscription.getUserId());
+        return subscription;
     }
 
     private void updateFromStripeSubscription(Subscription subscription,
