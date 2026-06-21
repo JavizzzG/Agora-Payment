@@ -2,11 +2,14 @@ package com.agora.payment.service;
 
 import com.agora.payment.config.StripeConfig;
 import com.agora.payment.dto.SubscriptionResponse;
+import com.agora.payment.entity.InvoiceRecord;
 import com.agora.payment.entity.Subscription;
+import com.agora.payment.repository.InvoiceRecordRepository;
 import com.agora.payment.repository.SubscriptionRepository;
 import com.stripe.exception.StripeException;
 import com.stripe.model.Event;
 import com.stripe.model.EventDataObjectDeserializer;
+import com.stripe.model.Invoice;
 import com.stripe.model.StripeObject;
 import com.stripe.model.checkout.Session;
 import lombok.Getter;
@@ -29,10 +32,14 @@ public class SubscriptionService {
     @Getter
     private final String webhookSecret;
     private final SubscriptionRepository subscriptionRepository;
+    private final InvoiceRecordRepository invoiceRecordRepository;
 
-    public SubscriptionService(StripeConfig stripeConfig, SubscriptionRepository subscriptionRepository) {
+    public SubscriptionService(StripeConfig stripeConfig,
+                               SubscriptionRepository subscriptionRepository,
+                               InvoiceRecordRepository invoiceRecordRepository) {
         this.webhookSecret = stripeConfig.getWebhookSecret();
         this.subscriptionRepository = subscriptionRepository;
+        this.invoiceRecordRepository = invoiceRecordRepository;
     }
 
     public void processEvent(Event event) {
@@ -148,8 +155,7 @@ public class SubscriptionService {
     }
 
     private void handleInvoiceFinalized(Event event) {
-        com.stripe.model.Invoice invoice =
-                (com.stripe.model.Invoice) deserializeStripeObject(event);
+        Invoice invoice = (Invoice) deserializeStripeObject(event);
         if (invoice == null) return;
 
         Subscription subscription = findSubscriptionByInvoice(invoice).orElseGet(() -> {
@@ -183,8 +189,7 @@ public class SubscriptionService {
     }
 
     private void handleInvoicePaid(Event event) {
-        com.stripe.model.Invoice invoice =
-                (com.stripe.model.Invoice) deserializeStripeObject(event);
+        Invoice invoice = (Invoice) deserializeStripeObject(event);
         if (invoice == null) return;
 
         Subscription subscription = findSubscriptionByInvoice(invoice).orElseGet(() -> {
@@ -203,6 +208,8 @@ public class SubscriptionService {
             return;
         }
 
+        upsertInvoiceRecord(invoice, "paid");
+
         subscription.setStatus(Subscription.Status.ACTIVE);
         if (invoice.getPeriodStart() != null) {
             subscription.setCurrentPeriodStart(Instant.ofEpochSecond(invoice.getPeriodStart()));
@@ -218,20 +225,22 @@ public class SubscriptionService {
         }
         subscriptionRepository.save(subscription);
 
-        log.info("Invoice paid: subscriptionId={} amount={} {}",
-                subscription.getId(), invoice.getAmountPaid(), invoice.getCurrency());
+        log.info("Invoice paid: subscriptionId={} invoiceId={} amount={} {}",
+                subscription.getId(), invoice.getId(), invoice.getAmountPaid(), invoice.getCurrency());
     }
 
     private void handleInvoicePaymentFailed(Event event) {
-        com.stripe.model.Invoice invoice =
-                (com.stripe.model.Invoice) deserializeStripeObject(event);
+        Invoice invoice = (Invoice) deserializeStripeObject(event);
         if (invoice == null) return;
+
+        upsertInvoiceRecord(invoice, "payment_failed");
 
         findSubscriptionByInvoice(invoice).ifPresent(subscription -> {
             subscription.setStatus(Subscription.Status.PAST_DUE);
             subscriptionRepository.save(subscription);
 
-            log.info("Invoice payment failed: subscriptionId={}", subscription.getId());
+            log.info("Invoice payment failed: subscriptionId={} invoiceId={}",
+                    subscription.getId(), invoice.getId());
         });
     }
 
@@ -240,7 +249,7 @@ public class SubscriptionService {
         return subscriptionRepository.findByStripeCustomerId(stripeCustomerId);
     }
 
-    private String getInvoiceSubscriptionId(com.stripe.model.Invoice invoice) {
+    private String getInvoiceSubscriptionId(Invoice invoice) {
         if (invoice.getParent() != null
                 && invoice.getParent().getSubscriptionDetails() != null) {
             return invoice.getParent().getSubscriptionDetails().getSubscription();
@@ -248,7 +257,7 @@ public class SubscriptionService {
         return null;
     }
 
-    private Optional<Subscription> findSubscriptionByInvoice(com.stripe.model.Invoice invoice) {
+    private Optional<Subscription> findSubscriptionByInvoice(Invoice invoice) {
         String subscriptionId = getInvoiceSubscriptionId(invoice);
         if (subscriptionId != null) {
             Optional<Subscription> bySub = subscriptionRepository.findByStripeSubscriptionId(subscriptionId);
@@ -260,7 +269,7 @@ public class SubscriptionService {
         return Optional.empty();
     }
 
-    private Subscription createSubscriptionFromInvoice(com.stripe.model.Invoice invoice) throws StripeException {
+    private Subscription createSubscriptionFromInvoice(Invoice invoice) throws StripeException {
         Subscription subscription = new Subscription();
         subscription.setStripeSubscriptionId(getInvoiceSubscriptionId(invoice));
         subscription.setStripeCustomerId(invoice.getCustomer());
@@ -339,6 +348,38 @@ public class SubscriptionService {
         if (userIdStr != null && subscription.getUserId() == null) {
             subscription.setUserId(UUID.fromString(userIdStr));
         }
+    }
+
+    private void upsertInvoiceRecord(Invoice invoice, String paymentStatus) {
+        String stripeInvoiceId = invoice.getId();
+        InvoiceRecord record = invoiceRecordRepository.findByStripeInvoiceId(stripeInvoiceId)
+                .orElseGet(InvoiceRecord::new);
+
+        record.setStripeInvoiceId(stripeInvoiceId);
+        record.setStripeSubscriptionId(getInvoiceSubscriptionId(invoice));
+        record.setStripeCustomerId(invoice.getCustomer());
+        record.setAmountPaid(invoice.getAmountPaid());
+        record.setAmountDue(invoice.getAmountDue());
+        record.setCurrency(invoice.getCurrency());
+        record.setStatus(paymentStatus);
+        record.setBillingReason(invoice.getBillingReason());
+        if (invoice.getStatusTransitions() != null && invoice.getStatusTransitions().getPaidAt() != null) {
+            record.setPaidAt(Instant.ofEpochSecond(invoice.getStatusTransitions().getPaidAt()));
+        }
+        if (invoice.getPeriodStart() != null) {
+            record.setPeriodStart(Instant.ofEpochSecond(invoice.getPeriodStart()));
+        }
+        if (invoice.getPeriodEnd() != null) {
+            record.setPeriodEnd(Instant.ofEpochSecond(invoice.getPeriodEnd()));
+        }
+        record.setInvoicePdf(invoice.getInvoicePdf());
+        record.setHostedInvoiceUrl(invoice.getHostedInvoiceUrl());
+        record.setNumber(invoice.getNumber());
+
+        invoiceRecordRepository.save(record);
+
+        log.info("Invoice record saved: invoiceId={} status={} amount={} {}",
+                stripeInvoiceId, paymentStatus, invoice.getAmountPaid(), invoice.getCurrency());
     }
 
     private StripeObject deserializeStripeObject(Event event) {

@@ -22,3 +22,27 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 CREATE INDEX IF NOT EXISTS idx_subscriptions_user_id ON subscriptions(user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_stripe_subscription_id ON subscriptions(stripe_subscription_id);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_stripe_customer_id ON subscriptions(stripe_customer_id);
+
+CREATE TABLE IF NOT EXISTS invoices (
+    id UUID PRIMARY KEY,
+    stripe_invoice_id VARCHAR(255) NOT NULL,
+    stripe_subscription_id VARCHAR(255),
+    stripe_customer_id VARCHAR(255),
+    amount_paid BIGINT,
+    amount_due BIGINT,
+    currency VARCHAR(3),
+    status VARCHAR(30),
+    billing_reason VARCHAR(50),
+    paid_at TIMESTAMPTZ,
+    period_start TIMESTAMPTZ,
+    period_end TIMESTAMPTZ,
+    invoice_pdf TEXT,
+    hosted_invoice_url TEXT,
+    number VARCHAR(50),
+    metadata TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_stripe_invoice_id ON invoices(stripe_invoice_id);
+CREATE INDEX IF NOT EXISTS idx_invoices_stripe_subscription_id ON invoices(stripe_subscription_id);
+CREATE INDEX IF NOT EXISTS idx_invoices_stripe_customer_id ON invoices(stripe_customer_id);
