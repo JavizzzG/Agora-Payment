@@ -1,6 +1,7 @@
 package com.agora.payment.exception;
 
 import com.agora.payment.exception.product.ProductNotFoundException;
+import com.agora.payment.exception.subscription.ActiveSubscriptionException;
 import com.stripe.exception.StripeException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -18,6 +19,16 @@ public class GlobalExceptionHandler {
                 ex.getMessage()
         );
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    @ExceptionHandler(ActiveSubscriptionException.class)
+    public ResponseEntity<ErrorResponse> handleActiveSubscription(ActiveSubscriptionException ex) {
+        ErrorResponse error = new ErrorResponse(
+                HttpStatus.CONFLICT.value(),
+                "Conflict",
+                ex.getMessage()
+        );
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
     }
 
     @ExceptionHandler(StripeException.class)

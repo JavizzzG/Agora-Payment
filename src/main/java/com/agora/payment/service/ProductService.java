@@ -1,6 +1,9 @@
 package com.agora.payment.service;
 
+import com.agora.payment.entity.Subscription;
 import com.agora.payment.exception.product.ProductNotFoundException;
+import com.agora.payment.exception.subscription.ActiveSubscriptionException;
+import com.agora.payment.repository.SubscriptionRepository;
 import com.stripe.exception.StripeException;
 import com.stripe.model.Price;
 import com.stripe.model.Product;
@@ -19,6 +22,19 @@ import java.util.UUID;
 public class ProductService {
 
     private static final Logger log = LoggerFactory.getLogger(ProductService.class);
+
+    private static final List<Subscription.Status> ACTIVE_SUBSCRIPTION_STATUSES = List.of(
+            Subscription.Status.INCOMPLETE,
+            Subscription.Status.TRIALING,
+            Subscription.Status.ACTIVE,
+            Subscription.Status.PAST_DUE
+    );
+
+    private final SubscriptionRepository subscriptionRepository;
+
+    public ProductService(SubscriptionRepository subscriptionRepository) {
+        this.subscriptionRepository = subscriptionRepository;
+    }
 
     public List<Product> getProducts() throws StripeException {
 
@@ -71,6 +87,19 @@ public class ProductService {
         SessionCreateParams.Mode mode = price.getRecurring() != null
                 ? SessionCreateParams.Mode.SUBSCRIPTION
                 : SessionCreateParams.Mode.PAYMENT;
+
+        if (mode == SessionCreateParams.Mode.SUBSCRIPTION) {
+            List<Subscription> activeSubscriptions = subscriptionRepository
+                    .findByUserIdAndStatusIn(userId, ACTIVE_SUBSCRIPTION_STATUSES);
+
+            if (!activeSubscriptions.isEmpty()) {
+                log.warn("User {} already has an active subscription. subscriptionId={}",
+                        userId, activeSubscriptions.getFirst().getId());
+                throw new ActiveSubscriptionException(
+                        "User already has an active subscription. Complete or cancel it before creating a new one."
+                );
+            }
+        }
 
         SessionCreateParams.Builder paramsBuilder = SessionCreateParams.builder()
                 .setMode(mode)
