@@ -29,6 +29,13 @@ public class SubscriptionService {
 
     private static final Logger log = LoggerFactory.getLogger(SubscriptionService.class);
 
+    private static final List<Subscription.Status> ACTIVE_SUBSCRIPTION_STATUSES = List.of(
+            Subscription.Status.INCOMPLETE,
+            Subscription.Status.TRIALING,
+            Subscription.Status.ACTIVE,
+            Subscription.Status.PAST_DUE
+    );
+
     @Getter
     private final String webhookSecret;
     private final SubscriptionRepository subscriptionRepository;
@@ -76,17 +83,30 @@ public class SubscriptionService {
             return;
         }
 
+        UUID userId = UUID.fromString(userIdStr);
         String stripeSubscriptionId = session.getSubscription();
 
         Optional<Subscription> existing = stripeSubscriptionId != null
                 ? subscriptionRepository.findByStripeSubscriptionId(stripeSubscriptionId)
                 : Optional.empty();
 
-        Subscription subscription = existing.orElseGet(Subscription::new);
+        Subscription subscription;
+        if (existing.isPresent()) {
+            subscription = existing.get();
+        } else {
+            List<Subscription> activeSubscriptions = subscriptionRepository
+                    .findByUserIdAndStatusIn(userId, ACTIVE_SUBSCRIPTION_STATUSES);
 
-        if (existing.isEmpty()) {
-            subscription.setUserId(UUID.fromString(userIdStr));
+            if (!activeSubscriptions.isEmpty()) {
+                subscription = activeSubscriptions.getFirst();
+                log.info("User {} already has active subscription (id={}). Reusing it with new Stripe subscription.",
+                        userId, subscription.getId());
+            } else {
+                subscription = new Subscription();
+                subscription.setUserId(userId);
+            }
         }
+
         subscription.setAmount(session.getAmountTotal());
         subscription.setCurrency(session.getCurrency());
         subscription.setStripeCustomerId(session.getCustomer());
